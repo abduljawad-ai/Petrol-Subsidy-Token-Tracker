@@ -2,7 +2,7 @@ name: fueltoken_tracker
 description: "Pakistan Petrol Subsidy Token Tracker - FuelToken Tracker"
 publish_to: 'none'
 
-version: 0.2.0+6
+version: 0.3.0+7
 
 environment:
   sdk: ^3.12.2

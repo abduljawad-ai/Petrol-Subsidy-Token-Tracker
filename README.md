@@ -6,7 +6,7 @@
   
   **An offline-first, high-privacy Android app to track, manage, and redeem Pakistan 9771 petrol subsidy relief tokens.**
 
-  [![Direct APK Download](https://img.shields.io/badge/Download%20APK-v0.2.0-006400?style=for-the-badge&logo=android&logoColor=white)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.2.0.apk)
+  [![Direct APK Download](https://img.shields.io/badge/Download%20APK-v0.3.0-006400?style=for-the-badge&logo=android&logoColor=white)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.3.0.apk)
 
   <br />
 
@@ -22,7 +22,7 @@
 
 No need to compile or set up Flutter. Download the ready-to-install Android APK directly to your phone:
 
-👉 **[Download FuelToken-Tracker-v0.2.0.apk (Direct Download)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.2.0.apk)**
+👉 **[Download FuelToken-Tracker-v0.3.0.apk (Direct Download)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.3.0.apk)**
 
 *(Or browse all versions on the [Releases Page](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases))*
 
