@@ -365,7 +365,7 @@ class _SyncSettingsBodyState extends State<SyncSettingsBody> {
 class _VersionFooter extends StatelessWidget {
   const _VersionFooter();
 
-  static const String _githubUrl = 'https://github.com/abduljawad-ai';
+  static const String _githubUrl = 'https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker';
 
   @override
   Widget build(BuildContext context) {
