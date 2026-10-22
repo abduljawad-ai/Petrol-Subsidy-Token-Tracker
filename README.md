@@ -4,16 +4,27 @@
 
   # FuelToken Tracker ⛽
   
-  **An offline-first, high-privacy Android utility to track, manage, and redeem Pakistan 9771 petrol subsidy relief tokens.**
+  **An offline-first, high-privacy Android app to track, manage, and redeem Pakistan 9771 petrol subsidy relief tokens.**
 
-  [![Flutter](https://img.shields.io/badge/Flutter-3.44+-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
-  [![Dart](https://img.shields.io/badge/Dart-3.12+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
-  [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white)](https://android.com)
-  [![Architecture](https://img.shields.io/badge/Architecture-Offline--First%20%7C%20Local%20SQLite-006400)](https://sqlite.org)
-  [![Tests](https://img.shields.io/badge/Tests-66%20Passing-success)](https://github.com/abduljawad-ai)
+  [![Direct APK Download](https://img.shields.io/badge/Download%20APK-v0.2.0-006400?style=for-the-badge&logo=android&logoColor=white)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.2.0.apk)
+
+  <br />
+
+  [![Release](https://img.shields.io/github/v/release/abduljawad-ai/Petrol-Subsidy-Token-Tracker?color=006400&logo=github)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest)
+  [![Platform](https://img.shields.io/badge/Platform-Android%208.0+-3DDC84?logo=android&logoColor=white)](https://android.com)
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 </div>
+
+---
+
+## 📥 Direct APK Download
+
+No need to compile or set up Flutter. Download the ready-to-install Android APK directly to your phone:
+
+👉 **[Download FuelToken-Tracker-v0.2.0.apk (Direct Download)](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases/latest/download/FuelToken-Tracker-v0.2.0.apk)**
+
+*(Or browse all versions on the [Releases Page](https://github.com/abduljawad-ai/Petrol-Subsidy-Token-Tracker/releases))*
 
 ---
 
@@ -28,90 +39,12 @@
 
 ---
 
-## 📱 Screenshots & Visual Flow
+## 📱 Screenshots
 
 | 1. Active Tokens (Privacy Masked) | 2. One-Time Redeem Modal | 3. Complete History & Search |
 |:---:|:---:|:---:|
 | <img src="assets/screenshots/home.png" width="230" alt="Home Screen with Masked Tokens" /> | <img src="assets/screenshots/use-token.png" width="230" alt="Use Token Confirmation Modal" /> | <img src="assets/screenshots/history.png" width="230" alt="Token History Screen" /> |
 | Compact header & protected codes | Attendant-friendly verification & one-time lock | Multi-select delete, filter & renewal tracking |
-
----
-
-## 🏗️ Architecture & Security Model
-
-```mermaid
-graph TD
-    SMS[Raw 9771 SMS / Camera Photo] --> Parser[Smart Regex Parser / Gemini OCR]
-    Parser --> SQLite[(Local SQLite Database)]
-    SQLite --> Security[Privacy Filter: Masked Display]
-    Security --> UI[Flutter UI: Tokens & History]
-    UI --> Actions[One-Time Redeem Action]
-    Actions --> SQLite
-    SQLite -.-> Sync[Drive Sync Engine: appDataFolder]
-    Sync -.-> Drive[(User's Private Google Drive)]
-```
-
-### Privacy & Secrets Guarantee
-- **No API Keys Hardcoded**: The repository contains zero embedded keys, secrets, or passwords.
-- **Client-Side Storage**: Gemini API keys are entered by the user and stored strictly on the local device (`DatabaseHelper`).
-- **Private Cloud Data**: Cloud backups reside strictly in the user's personal Google Drive hidden folder, ensuring zero tracking by intermediary servers.
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- [Flutter SDK](https://docs.flutter.dev/get-started/install) (v3.24+ recommended)
-- Android SDK (API 24+)
-- A physical Android device or emulator
-
-### Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/abduljawad-ai/fueltoken-tracker.git
-   cd fueltoken-tracker
-   ```
-
-2. **Fetch dependencies:**
-   ```bash
-   flutter pub get
-   ```
-
-3. **Run automated tests:**
-   ```bash
-   flutter test
-   ```
-
-4. **Run or build release APK:**
-   ```bash
-   # Run in debug mode
-   flutter run
-
-   # Assemble optimized release APK
-   flutter build apk --release --target-platform android-arm64
-   ```
-   The built APK will be ready at `build/app/outputs/flutter-apk/app-release.apk`.
-
----
-
-## 🛠️ Tech Stack & Directory Structure
-
-- **Framework**: [Flutter](https://flutter.dev) & [Dart](https://dart.dev)
-- **Local Database**: [sqflite](https://pub.dev/packages/sqflite) (SQLite)
-- **Cloud Backup**: Google Drive API v3 (REST via `google_sign_in` and app-private folder)
-- **OCR Engine**: Google Gemini Flash API (`google_generative_ai` via user-provided key)
-- **Notifications**: `flutter_local_notifications` & `timezone`
-
-```
-lib/
-├── db/          # Database helper & schema migrations
-├── models/      # Data structures (TokenRecord, VehicleType, TokenStatus)
-├── screens/     # UI Pages (Home, History, Detail, Settings, OCR Scanner)
-├── services/    # Drive sync, SMS parser, plate formatting, renewal logic
-├── theme/       # App graphics, typography, and styling
-└── widgets/     # Specialized ticket cards, empty states, and overlays
-```
 
 ---
 
