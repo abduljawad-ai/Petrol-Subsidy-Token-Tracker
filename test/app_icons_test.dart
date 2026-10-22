@@ -38,6 +38,8 @@ void main() {
     '$svg/action_delete.svg',
     '$svg/action_save.svg',
     '$svg/action_retry.svg',
+    // brand
+    '$svg/brand_github.svg',
     // reading states
     '$svg/ai_reading.svg',
     '$svg/state_done.svg',

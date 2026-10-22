@@ -64,6 +64,9 @@ class AppIcons {
   static const String stateDoubt = '$_svg/state_doubt.svg';
   static const String stateFailed = '$_svg/state_failed.svg';
 
+  // ── Brand links ──────────────────────────────────────────────────────────
+  static const String brandGithub = '$_svg/brand_github.svg';
+
   // ── Navigation & chrome ───────────────────────────────────────────────────
   static const String navTokens = '$_svg/nav_tokens.svg';
   static const String navHistory = '$_svg/nav_history.svg';

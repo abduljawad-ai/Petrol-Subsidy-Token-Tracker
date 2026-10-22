@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../db/database_helper.dart';
@@ -351,27 +353,60 @@ class _SyncSettingsBodyState extends State<SyncSettingsBody> {
         ),
 
         const SizedBox(height: 24),
-        Center(
-          child: InkWell(
-            onTap: () => launchUrl(
-              Uri.parse('https://github.com/abduljawad-ai'),
-              mode: LaunchMode.externalApplication,
-            ),
-            borderRadius: BorderRadius.circular(8),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Text(
-                'FuelToken Tracker · v0.1.4 (Build 5)',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textLight,
-                ),
+        const _VersionFooter(),
+      ],
+    );
+  }
+}
+
+/// Footer: the GitHub mark (opens the project's profile) next to the real
+/// app version — read from the installed APK itself, so the number always
+/// matches the actual build without any manual editing.
+class _VersionFooter extends StatelessWidget {
+  const _VersionFooter();
+
+  static const String _githubUrl = 'https://github.com/abduljawad-ai';
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: InkWell(
+        onTap: () => launchUrl(
+          Uri.parse(_githubUrl),
+          mode: LaunchMode.externalApplication,
+        ),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // The GitHub mark — a visible, obvious link, not a hidden one.
+              SvgPicture.asset(
+                AppIcons.brandGithub,
+                width: 16,
+                height: 16,
+                fit: BoxFit.contain,
               ),
-            ),
+              const SizedBox(width: 7),
+              FutureBuilder<PackageInfo>(
+                future: PackageInfo.fromPlatform(),
+                builder: (context, snap) {
+                  final v = snap.data?.version ?? '';
+                  return Text(
+                    'FuelToken Tracker · v$v',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textLight,
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 }
