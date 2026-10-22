@@ -1,0 +1,336 @@
+// Copyright 2013 The Flutter Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
+
+import 'src/messages.g.dart';
+
+/// Android implementation of [GoogleSignInPlatform].
+/// One-shot switch: the next [attemptLightweightAuthentication] is allowed
+/// to show the one-tap picker if no authorized account exists. Used ONLY
+/// while a user gesture is signing in, so the chosen account gets
+/// registered for quiet restores on later app opens. Never set from
+/// background work.
+bool _uiPromptArmed = false;
+
+void armOneTimeUiPromptForNextAttempt() => _uiPromptArmed = true;
+
+/// Clears the app's stored Google credential entries WITHOUT any user
+/// interface. Used when the background restore is told the device holds
+/// more than one registered account (the disambiguator popped up) — the
+/// store resets so the next sign-in gesture can register exactly one.
+Future<void> clearRegisteredCredentialsQuietly() async {
+  try {
+    await GoogleSignInPlatform.instance.signOut(const SignOutParams());
+  } catch (_) {/* nothing stored — fine */}
+}
+
+class GoogleSignInAndroid extends GoogleSignInPlatform {
+  /// Creates a new plugin implementation instance.
+  GoogleSignInAndroid({@visibleForTesting GoogleSignInApi? api})
+    : _hostApi = api ?? GoogleSignInApi();
+
+  final GoogleSignInApi _hostApi;
+
+  String? _serverClientId;
+  String? _hostedDomain;
+  String? _nonce;
+  // A cache of accounts that have been successfully authenticated via this
+  // plugin instance, and one of the scopes that has been authorized for it.
+  final Map<String, String> _cachedAccounts = <String, String>{};
+
+  /// Registers this class as the default instance of [GoogleSignInPlatform].
+  static void registerWith() {
+    GoogleSignInPlatform.instance = GoogleSignInAndroid();
+  }
+
+  @override
+  Future<void> clearAuthorizationToken(ClearAuthorizationTokenParams params) {
+    return _hostApi.clearAuthorizationToken(params.accessToken);
+  }
+
+  @override
+  Future<void> init(InitParameters params) async {
+    _hostedDomain = params.hostedDomain;
+    _serverClientId = params.serverClientId ?? await _hostApi.getGoogleServicesJsonServerClientId();
+    _nonce = params.nonce;
+    // The clientId parameter is not supported on Android.
+    // Android apps are identified by their package name and the SHA-1 of their signing key.
+  }
+
+  @override
+  Future<AuthenticationResults?> attemptLightweightAuthentication(
+    AttemptLightweightAuthenticationParameters params,
+  ) async {
+    // Attempt to auto-sign-in, for single-account or returning users.
+    PlatformGoogleIdTokenCredential? credential = await _authenticate(
+      useButtonFlow: false,
+      nonButtonFlowOptions: _LightweightAuthenticationOptions(
+        filterToAuthorized: true,
+        autoSelectEnabled: true,
+      ),
+    );
+    // FuelToken Tracker patch: the app must NEVER surface Google UI on
+    // its own. Upstream falls back to a visible one-tap picker whenever no
+    // authorized account exists. That prompt only ever runs here when the
+    // service explicitly arms it inside a user gesture (signing in), so
+    // the very gesture can register the account for future silent
+    // resumes. Background opens never prompt: a null result simply means
+    // nothing to restore this time.
+    if (credential == null && _uiPromptArmed) {
+      _uiPromptArmed = false;
+      credential = await _authenticate(
+        useButtonFlow: false,
+        nonButtonFlowOptions: _LightweightAuthenticationOptions(
+          filterToAuthorized: false,
+          autoSelectEnabled: false,
+        ),
+      );
+    }
+    return credential == null ? null : _authenticationResultFromPlatformCredential(credential);
+  }
+
+  @override
+  bool supportsAuthenticate() => true;
+
+  @override
+  Future<AuthenticationResults> authenticate(AuthenticateParameters params) async {
+    // Attempt to authorize with minimal interaction.
+    final PlatformGoogleIdTokenCredential? credential = await _authenticate(
+      useButtonFlow: true,
+      throwForNoAuth: true,
+      // Ignored, since useButtonFlow is true.
+      nonButtonFlowOptions: _LightweightAuthenticationOptions(
+        filterToAuthorized: false,
+        autoSelectEnabled: false,
+      ),
+    );
+    // It's not clear from the documentation if this can happen; if it does,
+    // no information is available
+    if (credential == null) {
+      throw const GoogleSignInException(
+        code: GoogleSignInExceptionCode.unknownError,
+        description: 'Authenticate returned no credential without an error',
+      );
+    }
+    return _authenticationResultFromPlatformCredential(credential);
+  }
+
+  @override
+  Future<void> signOut(SignOutParams params) {
+    return _hostApi.clearCredentialState();
+  }
+
+  @override
+  Future<void> disconnect(DisconnectParams params) async {
+    // AuthorizationClient requires an account, and at least one currently
+    // granted scope, to request revocation. The app-facing API currently
+    // does not take any parameters, and is documented to revoke all authorized
+    // accounts, so disconnect every account that has been authorized.
+    // TODO(stuartmorgan): Consider deprecating the account-less API at the
+    //  app-facing level, and have it instead be an account-level method, to
+    //  better align with the current SDKs.
+    for (final MapEntry<String, String> entry in _cachedAccounts.entries) {
+      // Because revokeAccess removes all authorizations for the app, not just
+      // the scopes provided, (per
+      // https://developer.android.com/identity/authorization#revoke-permissions)
+      // an arbitrary granted scope is used here.
+      await _hostApi.revokeAccess(
+        PlatformRevokeAccessRequest(accountEmail: entry.key, scopes: <String>[entry.value]),
+      );
+    }
+    _cachedAccounts.clear();
+    await signOut(const SignOutParams());
+  }
+
+  @override
+  bool authorizationRequiresUserInteraction() => false;
+
+  @override
+  Future<ClientAuthorizationTokenData?> clientAuthorizationTokensForScopes(
+    ClientAuthorizationTokensForScopesParameters params,
+  ) async {
+    final (:String? accessToken, :String? serverAuthCode) = await _authorize(
+      params.request,
+      requestOfflineAccess: false,
+    );
+    return accessToken == null ? null : ClientAuthorizationTokenData(accessToken: accessToken);
+  }
+
+  @override
+  Future<ServerAuthorizationTokenData?> serverAuthorizationTokensForScopes(
+    ServerAuthorizationTokensForScopesParameters params,
+  ) async {
+    final (:String? accessToken, :String? serverAuthCode) = await _authorize(
+      params.request,
+      requestOfflineAccess: true,
+    );
+    return serverAuthCode == null
+        ? null
+        : ServerAuthorizationTokenData(serverAuthCode: serverAuthCode);
+  }
+
+  /// Authenticates with the platform credential manager using either the
+  /// button-initiated flow (useButtonFlow = true, nonButtonFlowOptions are
+  /// ignored), or the lightweight flow (useButtonFlow = false,
+  /// nonButtonFlowOptions are used to configure the request).
+  ///
+  /// See https://developer.android.com/identity/sign-in/credential-manager-siwg
+  /// for discussion of the two different flows
+  Future<PlatformGoogleIdTokenCredential?> _authenticate({
+    required bool useButtonFlow,
+    required _LightweightAuthenticationOptions nonButtonFlowOptions,
+    bool throwForNoAuth = false,
+  }) async {
+    final GetCredentialResult authnResult = await _hostApi.getCredential(
+      GetCredentialRequestParams(
+        useButtonFlow: useButtonFlow,
+        googleIdOptionParams: GetCredentialRequestGoogleIdOptionParams(
+          filterToAuthorized: nonButtonFlowOptions.filterToAuthorized,
+          autoSelectEnabled: nonButtonFlowOptions.autoSelectEnabled,
+        ),
+        serverClientId: _serverClientId,
+        hostedDomain: _hostedDomain,
+        nonce: _nonce,
+      ),
+    );
+    switch (authnResult) {
+      case GetCredentialFailure():
+        String? message = authnResult.message;
+        final GoogleSignInExceptionCode code;
+        switch (authnResult.type) {
+          case GetCredentialFailureType.noCredential:
+            if (throwForNoAuth) {
+              code = GoogleSignInExceptionCode.unknownError;
+              message = 'No credential available: $message';
+            } else {
+              return null;
+            }
+          case GetCredentialFailureType.unexpectedCredentialType:
+            // This should not actually be possible in practice, so it is
+            // grouped under providerConfigurationError instead of given a
+            // distinct code.
+            code = GoogleSignInExceptionCode.providerConfigurationError;
+            message = 'Unexpected credential type: $message';
+          case GetCredentialFailureType.noActivity:
+            code = GoogleSignInExceptionCode.uiUnavailable;
+          case GetCredentialFailureType.interrupted:
+            code = GoogleSignInExceptionCode.interrupted;
+          case GetCredentialFailureType.providerConfigurationIssue:
+            code = GoogleSignInExceptionCode.providerConfigurationError;
+          case GetCredentialFailureType.unsupported:
+            code = GoogleSignInExceptionCode.providerConfigurationError;
+            message = 'Credential Manager not supported. $message';
+          case GetCredentialFailureType.canceled:
+            code = GoogleSignInExceptionCode.canceled;
+          case GetCredentialFailureType.missingServerClientId:
+            code = GoogleSignInExceptionCode.clientConfigurationError;
+            message = 'serverClientId must be provided on Android';
+          case GetCredentialFailureType.unknown:
+            code = GoogleSignInExceptionCode.unknownError;
+        }
+        throw GoogleSignInException(code: code, description: message, details: authnResult.details);
+      case GetCredentialSuccess():
+        // Store a preliminary entry using the 'openid' scope, which in practice
+        // always seems to be granted at authentication time, so that an account
+        // that is authenticated but never authorized can still be disconnected.
+        _cachedAccounts[authnResult.credential.email] = 'openid';
+        return authnResult.credential;
+    }
+  }
+
+  Future<({String? accessToken, String? serverAuthCode})> _authorize(
+    AuthorizationRequestDetails request, {
+    required bool requestOfflineAccess,
+  }) async {
+    final String? email = request.email;
+    final AuthorizeResult result = await _hostApi.authorize(
+      PlatformAuthorizationRequest(
+        scopes: request.scopes,
+        accountEmail: email,
+        hostedDomain: _hostedDomain,
+        serverClientIdForForcedRefreshToken: requestOfflineAccess ? _serverClientId : null,
+      ),
+      promptIfUnauthorized: request.promptIfUnauthorized,
+    );
+    switch (result) {
+      case AuthorizeFailure():
+        String? message = result.message;
+        final GoogleSignInExceptionCode code;
+        switch (result.type) {
+          case AuthorizeFailureType.unauthorized:
+            // This indicates that there was no existing authorization and
+            // prompting wasn't allowed, so just return null.
+            return (accessToken: null, serverAuthCode: null);
+          case AuthorizeFailureType.pendingIntentException:
+            code = GoogleSignInExceptionCode.canceled;
+          case AuthorizeFailureType.authorizeFailure:
+            message = 'Authorization failed: $message';
+            code = GoogleSignInExceptionCode.unknownError;
+          case AuthorizeFailureType.apiException:
+            message = 'SDK reported an exception: $message';
+            code = GoogleSignInExceptionCode.unknownError;
+          case AuthorizeFailureType.noActivity:
+            code = GoogleSignInExceptionCode.uiUnavailable;
+        }
+        throw GoogleSignInException(code: code, description: message, details: result.details);
+      case PlatformAuthorizationResult():
+        final String? accessToken = result.accessToken;
+        if (accessToken == null) {
+          return (accessToken: null, serverAuthCode: null);
+        }
+        // Update the account entry with a scope that was reported as granted,
+        // just in case for some reason 'openid' isn't valid. If the request
+        // wasn't associated with an account, then it won't be available to
+        // disconnect.
+        // TODO(stuartmorgan): If this becomes an issue, see if there is an
+        //  indirect way to get the associated email address that's not
+        //  deprecated.
+        if (email != null) {
+          final String? scope = result.grantedScopes.firstOrNull;
+          if (scope != null) {
+            _cachedAccounts[email] = scope;
+          }
+        }
+        return (accessToken: accessToken, serverAuthCode: result.serverAuthCode);
+    }
+  }
+
+  AuthenticationResults _authenticationResultFromPlatformCredential(
+    PlatformGoogleIdTokenCredential credential,
+  ) {
+    return AuthenticationResults(
+      user: GoogleSignInUserData(
+        email: credential.email,
+        id: credential.uniqueId,
+        displayName: credential.displayName,
+        photoUrl: credential.profilePictureUri,
+      ),
+      authenticationTokens: AuthenticationTokenData(idToken: credential.idToken),
+    );
+  }
+}
+
+/// Options specific to authentication with the lightweight authentication
+/// flow, rather than the explict user-requested login flow.
+///
+/// These correspond to builder options specific to GetGoogleIdOption on the
+/// platform side.
+class _LightweightAuthenticationOptions {
+  _LightweightAuthenticationOptions({
+    required this.filterToAuthorized,
+    required this.autoSelectEnabled,
+  });
+
+  /// If true, only allows selection of accounts that have already authorized
+  /// the app.
+  bool filterToAuthorized;
+
+  /// If true, automatically selects an account if there is only one
+  /// authorized account and no additional user action is required.
+  bool autoSelectEnabled;
+}

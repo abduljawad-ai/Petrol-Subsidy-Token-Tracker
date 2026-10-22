@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200"><circle cx="120" cy="98" r="86" fill="#E8F5E9"/><ellipse cx="120" cy="180" rx="76" ry="7" fill="#12341C" opacity=".1"/>
+<g fill="#006400" stroke="#006400" stroke-width="16" stroke-linejoin="round"><circle cx="88" cy="122" r="24"/><circle cx="124" cy="104" r="32"/><circle cx="162" cy="126" r="22"/><rect x="88" y="122" width="74" height="26"/></g>
+<g fill="#fff"><circle cx="88" cy="122" r="24"/><circle cx="124" cy="104" r="32"/><circle cx="162" cy="126" r="22"/><rect x="88" y="122" width="74" height="26"/></g>
+<path d="M112.7 130.7A16 16 0 0 1 135.3 130.7" fill="none" stroke="#12341C" stroke-width="7.5" stroke-linecap="round"/>
+<path d="M101.4 119.4A32 32 0 0 1 146.6 119.4" fill="none" stroke="#12341C" stroke-width="6.5" stroke-linecap="round"/>
+<circle cx="124" cy="142" r="5" fill="#12341C"/>
+<path d="M82 70L166 154" stroke="#12341C" stroke-width="17" stroke-linecap="round"/><path d="M82 70L166 154" stroke="#FFD700" stroke-width="9" stroke-linecap="round"/>
+<path d="M200 46L202.8 53.2L210 56L202.8 58.8L200 66L197.2 58.8L190 56L197.2 53.2z" fill="#FFD700"/><circle cx="44" cy="74" r="4" fill="#006400" opacity=".35"/>
+</svg>

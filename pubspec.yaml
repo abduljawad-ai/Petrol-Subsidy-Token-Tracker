@@ -1,0 +1,59 @@
+name: fueltoken_tracker
+description: "Pakistan Petrol Subsidy Token Tracker - FuelToken Tracker"
+publish_to: 'none'
+
+version: 0.1.4+5
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  sqflite: ^2.4.2
+  path: ^1.9.0
+  intl: ^0.20.2
+  share_plus: ^11.0.0
+  flutter_slidable: ^3.1.1
+  uuid: ^4.5.1
+  collection: ^1.19.1
+  google_sign_in: ^7.2.0
+  google_sign_in_android: ^7.2.18
+  google_sign_in_platform_interface: ^3.1.0
+  http: ^1.6.0
+  image_picker: ^1.1.2
+  flutter_svg: ^2.3.0
+  crop_your_image: ^2.0.1
+  crypto: ^3.0.3
+  flutter_image_compress: ^2.5.1
+  lottie: ^3.6.1
+  flutter_local_notifications: ^19.2.1
+  timezone: ^0.10.1
+  flutter_timezone: ^4.0.0
+  url_launcher: ^6.3.3
+
+dependency_overrides:
+  google_sign_in_android:
+    path: packages/android_gsi_no_ui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  sqflite_common_ffi: ^2.3.5
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fueltoken_icons/svg/
+    - assets/fueltoken_icons/png/
+    - assets/fueltoken_anim/anim/
+    - assets/fueltoken_anim/svg/
+
+flutter_launcher_icons:
+  image_path: assets/launcher/icon_full.png
+  adaptive_icon_background: "#006400"
+  adaptive_icon_foreground: assets/launcher/icon_fg_safe.png
+  android: true

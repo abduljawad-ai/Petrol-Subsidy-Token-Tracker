@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200"><circle cx="120" cy="98" r="86" fill="#E8F5E9"/><ellipse cx="120" cy="180" rx="76" ry="7" fill="#12341C" opacity=".1"/>
+<rect x="34" y="50" width="64" height="112" rx="12" fill="#006400"/>
+<rect x="40" y="60" width="52" height="92" rx="6" fill="#fff"/>
+<rect x="56" y="54" width="20" height="3.5" rx="1.75" fill="#E8F5E9"/>
+<path d="M47 70h38a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5H60l-8 7v-7h-5a5 5 0 0 1-5-5V75a5 5 0 0 1 5-5z" fill="#E8F5E9"/>
+<rect x="50" y="76" width="30" height="4" rx="2" fill="#12341C" opacity=".55"/><rect x="50" y="85" width="22" height="4" rx="2" fill="#12341C" opacity=".35"/>
+<rect x="47" y="108" width="38" height="22" rx="6" fill="#FFD700"/><rect x="53" y="115" width="26" height="4" rx="2" fill="#12341C" opacity=".6"/>
+<circle cx="66" cy="142" r="3" fill="#006400" opacity=".5"/>
+<g transform="translate(101.1 50.4) scale(0.92)"><path d="M24 30H104a10 10 0 0 1 10 10V55a9 9 0 0 0 0 18V88a10 10 0 0 1-10 10H24A10 10 0 0 1 14 88V73a9 9 0 0 0 0-18V40A10 10 0 0 1 24 30z" fill="#fff" stroke="#FFD700" stroke-width="4.5" stroke-dasharray="9 7" stroke-linejoin="round"/></g>
+<path d="M163 103.5V121.5M154 112.5H172" stroke="#006400" stroke-width="6" stroke-linecap="round"/>
+<path d="M200 47L203.08 54.92L211 58L203.08 61.08L200 69L196.92 61.08L189 58L196.92 54.92z" fill="#FFD700"/><circle cx="212" cy="84" r="4" fill="#006400" opacity=".35"/><circle cx="104" cy="52" r="3.5" fill="#FFD700"/>
+</svg>

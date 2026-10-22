@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200"><circle cx="120" cy="98" r="86" fill="#E8F5E9"/><ellipse cx="120" cy="180" rx="76" ry="7" fill="#12341C" opacity=".1"/>
+<path d="M64 92V76a24 24 0 0 1 48 0V92" fill="none" stroke="#12341C" stroke-width="11" stroke-linecap="round"/>
+<rect x="44" y="90" width="88" height="70" rx="14" fill="#006400"/>
+<rect x="44" y="90" width="88" height="14" rx="7" fill="#fff" opacity=".12"/>
+<circle cx="88" cy="119" r="9" fill="#FFD700"/><rect x="84.5" y="122" width="7" height="18" rx="3.5" fill="#FFD700"/>
+<g transform="rotate(-32 178 128)" stroke="#12341C" stroke-width="4" stroke-linejoin="round">
+<circle cx="156" cy="128" r="17" fill="#FFD700"/><circle cx="156" cy="128" r="6" fill="#E8F5E9"/>
+<rect x="170" y="123.5" width="56" height="9" rx="3" fill="#FFD700"/><rect x="204" y="132" width="8" height="14" rx="2" fill="#FFD700"/><rect x="216" y="132" width="8" height="10" rx="2" fill="#FFD700"/>
+</g>
+<path d="M60 43L62.52 49.48L69 52L62.52 54.52L60 61L57.48 54.52L51 52L57.48 49.48z" fill="#FFD700"/><circle cx="204" cy="60" r="4" fill="#006400" opacity=".35"/>
+</svg>
