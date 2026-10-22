@@ -30,10 +30,10 @@
 
 ## 📱 Screenshots & Visual Flow
 
-| 1. Active Tokens (Privacy Masked) | 2. Redesigned Settings & Gemini Setup | 3. Token Detail View |
+| 1. Active Tokens (Privacy Masked) | 2. One-Time Redeem Modal | 3. Complete History & Search |
 |:---:|:---:|:---:|
-| <img src="assets/fueltoken_icons/png/token_card.png" width="220" /> | <img src="assets/fueltoken_icons/png/cloud_back_up.png" width="220" /> | <img src="assets/fueltoken_icons/png/state_done.png" width="220" /> |
-| Compact status header & protected codes | Clear step-by-step API guide & Drive sync | Full ticket layout & single-tap redeem |
+| <img src="assets/screenshots/home.png" width="230" alt="Home Screen with Masked Tokens" /> | <img src="assets/screenshots/use-token.png" width="230" alt="Use Token Confirmation Modal" /> | <img src="assets/screenshots/history.png" width="230" alt="Token History Screen" /> |
+| Compact header & protected codes | Attendant-friendly verification & one-time lock | Multi-select delete, filter & renewal tracking |
 
 ---
 
