@@ -51,9 +51,3 @@ No need to compile or set up Flutter. Download the ready-to-install Android APK 
 ## 📄 License
 
 This project is open-source under the [MIT License](LICENSE).
-
----
-
-<div align="center">
-  Crafted with care by <a href="https://github.com/abduljawad-ai"><b>Jawad</b></a>
-</div>
