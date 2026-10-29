@@ -36,11 +36,12 @@ class SyncState {
     bool? busy,
     String? error,
     bool? setupNeeded,
+    bool clearEmail = false,
     bool clearError = false,
   }) =>
       SyncState(
         signedIn: signedIn ?? this.signedIn,
-        email: email ?? this.email,
+        email: clearEmail ? null : (email ?? this.email),
         lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
         busy: busy ?? this.busy,
         error: clearError ? null : (error ?? this.error),
@@ -63,6 +64,9 @@ class DriveSyncService {
   static const String _driveBase = 'https://www.googleapis.com/drive/v3';
   static const String _driveUploadBase =
       'https://www.googleapis.com/upload/drive/v3';
+  static const Duration _httpTimeout = Duration(seconds: 30);
+  static const Duration _minRetry = Duration(seconds: 90);
+  static const Duration _maxRetry = Duration(minutes: 15);
 
   final ValueNotifier<SyncState> state = ValueNotifier(const SyncState());
 
@@ -73,8 +77,14 @@ class DriveSyncService {
   bool _gestureBusy = false;
   bool _syncing = false;
   bool _queued = false;
-  bool _initialized = false;
+  Future<void>? _initFuture;
   bool _gsiInitialized = false;
+  Duration _retryDelay = _minRetry;
+
+  /// Every Drive/HTTP call gets a hard deadline. Without one a stalled socket
+  /// keeps `_syncing` true forever and every later sync is silently dropped.
+  Future<http.Response> _send(Future<http.Response> request) =>
+      request.timeout(_httpTimeout);
 
   Future<void> _ensureGsiInitialized() async {
     if (_gsiInitialized) return;
@@ -86,10 +96,25 @@ class DriveSyncService {
   /// One-time app boot initialization.
   /// Instantly restores the saved session from DB so Settings & UI show
   /// "Backup is on" immediately with NO popups, NO delays, and NO timers.
+  ///
+  /// The in-flight Future is memoized: callers that arrive while the first
+  /// run is still reading meta must wait, not sail past a half-restored
+  /// session (which used to show the "back up?" intro to signed-in users).
   Future<void> init() async {
-    if (_initialized) return;
-    _initialized = true;
+    final existing = _initFuture;
+    if (existing != null) return existing;
+    final next = _initOnce();
+    _initFuture = next;
+    try {
+      await next;
+    } catch (_) {
+      // Allow a later attempt (e.g. DB temporarily locked at boot).
+      if (identical(_initFuture, next)) _initFuture = null;
+      rethrow;
+    }
+  }
 
+  Future<void> _initOnce() async {
     DatabaseHelper.addWriteListener((_) => instance.kick());
     await _reloadLastSynced();
 
@@ -151,7 +176,8 @@ class DriveSyncService {
             promptIfUnauthorized: allowUi,
           ),
         ),
-      );
+      )
+          .timeout(const Duration(seconds: 20));
       return tokens?.accessToken;
     } catch (_) {
       return null;
@@ -174,7 +200,7 @@ class DriveSyncService {
     if (_gestureBusy) return _account;
     _gestureBusy = true;
     try {
-      if (!_initialized) await init();
+      await init();
       await _ensureGsiInitialized();
 
       // Official Google sign-in account chooser
@@ -243,7 +269,14 @@ class DriveSyncService {
   // ── SIGN OUT ────────────────────────────────────────────────────────────────
   /// Explicitly severs the session. Only after this does the app prompt for login again.
   Future<void> signOut() async {
-    if (!_initialized) await init();
+    await init();
+    // Stop every queued/pending background pass: a retry that wakes up after
+    // sign-out would otherwise try to re-authenticate silently.
+    _silentRetry?.cancel();
+    _silentRetry = null;
+    _debounce?.cancel();
+    _debounce = null;
+    _retryDelay = _minRetry;
     try {
       await _ensureGsiInitialized();
       await GoogleSignIn.instance.signOut();
@@ -254,7 +287,7 @@ class DriveSyncService {
     await _db.setMeta('signed_email', '');
     state.value = state.value.copyWith(
       signedIn: false,
-      email: null,
+      clearEmail: true,
       clearError: true,
     );
   }
@@ -313,26 +346,32 @@ class DriveSyncService {
           "(name = '$kBackupFileGzName' or name = '$kBackupFileName') and trashed = false",
         )}'
             '&spaces=appDataFolder');
-        final listRes = await client.get(listUri, headers: headers);
+        final listRes = await _send(client.get(listUri, headers: headers));
         if (listRes.statusCode != 200) {
           throw 'Drive error ${listRes.statusCode}: ${SyncText.driveError(listRes.body)}';
         }
         final files = (jsonDecode(listRes.body)['files'] as List?) ?? const [];
+        // Prefer the compressed file when a legacy plain-JSON file still
+        // exists in the same folder (older installs uploaded both).
         Map<String, dynamic>? fileRow;
-        for (final f in files) {
-          final row = f as Map<String, dynamic>;
+        Map<String, dynamic>? legacyRow;
+        for (final f in files.whereType<Map>()) {
+          final row = Map<String, dynamic>.from(f);
           if (row['name'] == kBackupFileGzName) {
             fileRow = row;
-            break;
+          } else {
+            legacyRow ??= row;
           }
-          fileRow ??= row;
         }
+        fileRow ??= legacyRow;
         final String? fileId = fileRow?['id'] as String?;
         final String? remoteMtime = fileRow?['modifiedTime'] as String?;
         final seenMtime = await _db.getMeta('drive_mtime_seen');
         final pushedHash = await _db.getMeta('drive_push_hash');
 
         final localRows = await _db.getSyncSnapshot();
+        // Normalized through rowToRecord inside recordsHash, so this equals
+        // the hash of the pushed snapshot for the same content.
         final localHash = BackupCodec.recordsHash(localRows);
         final remoteUnchanged = remoteMtime != null && remoteMtime == seenMtime;
 
@@ -354,10 +393,10 @@ class DriveSyncService {
         String remoteHash = '';
         bool remoteChanged = false;
         if (fileId != null && !remoteUnchanged) {
-          final dl = await client.get(
+          final dl = await _send(client.get(
             Uri.parse('$_driveBase/files/$fileId?alt=media'),
             headers: headers,
-          );
+          ));
           if (dl.statusCode != 200) {
             throw 'Drive download failed ${dl.statusCode}: ${SyncText.driveError(dl.body)}';
           }
@@ -394,98 +433,70 @@ class DriveSyncService {
             lastSyncedAtMs: DateTime.now().millisecondsSinceEpoch,
           );
           final gzBytes = gzip.encode(utf8.encode(jsonEncode(envelope)));
-          final useGzName = (fileRow == null) ||
-              (fileRow['name'] == kBackupFileGzName);
-          if (fileId != null && useGzName) {
-            final put = await client.patch(
-              Uri.parse('$_driveUploadBase/files/$fileId?uploadType=media'),
-              headers: {
-                ...headers,
-                'Content-Type': 'application/gzip',
-                'Content-Encoding': 'gzip',
-              },
-              body: gzBytes,
-            );
-            if (put.statusCode != 200) {
-              throw 'Drive upload failed ${put.statusCode}: ${SyncText.driveError(put.body)}';
-            }
-            final mt =
-                (jsonDecode(put.body)['modifiedTime'] ?? '') as String;
-            if (mt.isNotEmpty) {
-              await _db.setMeta('drive_mtime_seen', mt);
-            }
-            await _db.setMeta('drive_push_hash', snapshotHash);
-          } else if (fileId != null) {
-            final create = await client.post(
+          final gzHeaders = {
+            ...headers,
+            'Content-Type': 'application/gzip',
+            'Content-Encoding': 'gzip',
+          };
+
+          // Patch the existing .gz file, or create it (first backup, or the
+          // cloud only has the legacy plain-JSON file).
+          var targetId =
+              fileRow?['name'] == kBackupFileGzName ? fileId : null;
+          if (targetId == null) {
+            final create = await _send(client.post(
               Uri.parse('$_driveBase/files?fields=id'),
               headers: {...headers, 'Content-Type': 'application/json'},
               body: jsonEncode({
                 'name': kBackupFileGzName,
                 'parents': ['appDataFolder'],
               }),
-            );
+            ));
             if (create.statusCode != 200 && create.statusCode != 201) {
               throw 'Drive create failed ${create.statusCode}: ${SyncText.driveError(create.body)}';
             }
-            final newId = (jsonDecode(create.body)['id'] ?? '') as String;
-            if (newId.isEmpty) throw 'Drive create returned no file id.';
-            final filled = await client.patch(
-              Uri.parse('$_driveUploadBase/files/$newId?uploadType=media'),
-              headers: {
-                ...headers,
-                'Content-Type': 'application/gzip',
-                'Content-Encoding': 'gzip',
-              },
-              body: gzBytes,
-            );
-            if (filled.statusCode != 200) {
-              throw 'Drive upload failed ${filled.statusCode}: ${SyncText.driveError(filled.body)}';
+            targetId = (jsonDecode(create.body)['id'] ?? '') as String;
+            if (targetId.isEmpty) throw 'Drive create returned no file id.';
+          }
+
+          final put = await _send(client.patch(
+            Uri.parse('$_driveUploadBase/files/$targetId?uploadType=media'),
+            headers: gzHeaders,
+            body: gzBytes,
+          ));
+          if (put.statusCode != 200) {
+            throw 'Drive upload failed ${put.statusCode}: ${SyncText.driveError(put.body)}';
+          }
+          final mt = (jsonDecode(put.body)['modifiedTime'] ?? '') as String;
+          if (mt.isNotEmpty) {
+            await _db.setMeta('drive_mtime_seen', mt);
+          }
+          await _db.setMeta('drive_push_hash', snapshotHash);
+
+          // The legacy plain file is superseded: trash it (best effort) so a
+          // fresh install cannot restore a stale copy.
+          final legacyId = legacyRow?['id'] as String?;
+          if (legacyId != null && legacyId.isNotEmpty && legacyId != targetId) {
+            try {
+              await _send(client.patch(
+                Uri.parse('$_driveBase/files/$legacyId'),
+                headers: {...headers, 'Content-Type': 'application/json'},
+                body: jsonEncode({'trashed': true}),
+              ));
+            } catch (_) {
+              // Cleanup only — the backup itself already succeeded.
             }
-            final mt =
-                (jsonDecode(filled.body)['modifiedTime'] ?? '') as String;
-            if (mt.isNotEmpty) {
-              await _db.setMeta('drive_mtime_seen', mt);
-            }
-            await _db.setMeta('drive_push_hash', snapshotHash);
-          } else {
-            final create = await client.post(
-              Uri.parse('$_driveBase/files?fields=id'),
-              headers: {...headers, 'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'name': kBackupFileGzName,
-                'parents': ['appDataFolder'],
-              }),
-            );
-            if (create.statusCode != 200 && create.statusCode != 201) {
-              throw 'Drive create failed ${create.statusCode}: ${SyncText.driveError(create.body)}';
-            }
-            final newId = (jsonDecode(create.body)['id'] ?? '') as String;
-            if (newId.isEmpty) throw 'Drive create returned no file id.';
-            final filled = await client.patch(
-              Uri.parse('$_driveUploadBase/files/$newId?uploadType=media'),
-              headers: {
-                ...headers,
-                'Content-Type': 'application/gzip',
-                'Content-Encoding': 'gzip',
-              },
-              body: gzBytes,
-            );
-            if (filled.statusCode != 200) {
-              throw 'Drive upload failed ${filled.statusCode}: ${SyncText.driveError(filled.body)}';
-            }
-            final mt =
-                (jsonDecode(filled.body)['modifiedTime'] ?? '') as String;
-            if (mt.isNotEmpty) {
-              await _db.setMeta('drive_mtime_seen', mt);
-            }
-            await _db.setMeta('drive_push_hash', snapshotHash);
           }
         } else if (remoteChanged) {
+          // Content is identical: remember the hash so the next pass can take
+          // the no-op fast path instead of downloading the file again.
           await _db.setMeta('drive_mtime_seen', remoteMtime ?? '');
+          await _db.setMeta('drive_push_hash', snapshotHash);
         }
 
         // 5) Bookkeeping
         final now = DateTime.now();
+        _retryDelay = _minRetry;
         await _db.setMeta(_metaLastSynced, now.millisecondsSinceEpoch.toString());
         state.value = state.value.copyWith(
           busy: false,
@@ -514,7 +525,12 @@ class DriveSyncService {
 
   void _scheduleSilentRetry() {
     _silentRetry?.cancel();
-    _silentRetry = Timer(const Duration(seconds: 90), () {
+    final delay = _retryDelay;
+    // Exponential backoff: a phone offline for hours must not wake every 90s
+    // forever. Reset to the floor after the next successful sync.
+    final next = _retryDelay * 2;
+    _retryDelay = next > _maxRetry ? _maxRetry : next;
+    _silentRetry = Timer(delay, () {
       if (state.value.signedIn) {
         unawaited(syncNow('auto'));
       }
@@ -535,17 +551,22 @@ class DriveSyncService {
         "(name = '$kBackupFileGzName' or name = '$kBackupFileName') and trashed = false",
       )}'
           '&spaces=appDataFolder');
-      final res = await client.get(listUri, headers: headers);
+      final res = await _send(client.get(listUri, headers: headers));
       if (res.statusCode != 200) return null;
       final files = (jsonDecode(res.body)['files'] as List?) ?? const [];
-      if (files.isEmpty) return null;
-      final first = files.first as Map;
+      final rows = files.whereType<Map>().toList();
+      if (rows.isEmpty) return null;
+      // Same preference as syncNow: the compressed file is authoritative.
+      final first = rows.firstWhere(
+        (f) => f['name'] == kBackupFileGzName,
+        orElse: () => rows.first,
+      );
       final modified =
           DateTime.tryParse(first['modifiedTime'] as String? ?? '');
-      final dl = await client.get(
+      final dl = await _send(client.get(
         Uri.parse('$_driveBase/files/${first['id']}?alt=media'),
         headers: headers,
-      );
+      ));
       final payload = dl.bodyBytes;
       if (payload.isEmpty) return null;
       final decodedJson = BackupCodec.isGzipped(payload)
@@ -553,7 +574,8 @@ class DriveSyncService {
           : utf8.decode(payload);
       if (decodedJson.trim().isEmpty) return null;
       final records = BackupCodec.parseEnvelope(jsonDecode(decodedJson));
-      final live = records.where((r) => r['deleted'] != true).length;
+      final live =
+          records.where((r) => r['deleted'] != true && r['deleted'] != 1).length;
       if (live == 0) return null;
       return (live, modified ?? DateTime.now());
     } catch (_) {

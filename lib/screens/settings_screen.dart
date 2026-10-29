@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -7,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../db/database_helper.dart';
 import '../services/drive_sync_service.dart';
 import '../services/ocr_service.dart';
+import '../services/token_notifications.dart';
 import '../theme/app_graphics.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ft_components.dart';
@@ -138,13 +141,13 @@ class _SyncSettingsBodyState extends State<SyncSettingsBody> {
   void initState() {
     super.initState();
     _sync.init();
-    DatabaseHelper.addWriteListener(_onDbWrite);
+    DatabaseHelper.addChangeListener(_onDbWrite);
     _refreshCount();
   }
 
   @override
   void dispose() {
-    DatabaseHelper.removeWriteListener(_onDbWrite);
+    DatabaseHelper.removeChangeListener(_onDbWrite);
     super.dispose();
   }
 
@@ -169,6 +172,11 @@ class _SyncSettingsBodyState extends State<SyncSettingsBody> {
         const FtSectionTitle('Photo reading',
             padding: EdgeInsets.fromLTRB(20, 14, 20, 6)),
         const _OcrKeyCard(),
+
+        // ── Renewal reminders ──────────────────────────────────────────────
+        const FtSectionTitle('Renewal reminders',
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 6)),
+        const _RemindersCard(),
 
         // ── Backup & Sync ──────────────────────────────────────────────────
         const FtSectionTitle('Backup & Sync',
@@ -749,6 +757,346 @@ class _OcrKeyCardState extends State<_OcrKeyCard> {
       ),
     );
   }
+}
+
+/// Live reminder health: shows whether Android is actually allowing the
+/// notifications, whether exact alarms are available, how many alarms are
+/// queued, and a test button that proves the whole path end to end.
+class _RemindersCard extends StatefulWidget {
+  const _RemindersCard();
+
+  @override
+  State<_RemindersCard> createState() => _RemindersCardState();
+}
+
+class _RemindersCardState extends State<_RemindersCard>
+    with WidgetsBindingObserver {
+  final DatabaseHelper _db = DatabaseHelper();
+  ReminderDiagnostics? _diag;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back from the Android permission screens is exactly when the
+    // status changes; refresh it without making the user tap anything.
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  Future<void> _load() async {
+    final d = await TokenNotifications.instance.diagnostics();
+    if (mounted) setState(() => _diag = d);
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  Future<void> _test() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      var enabled = _diag?.notificationsEnabled ?? false;
+      if (!enabled) {
+        enabled = await TokenNotifications.instance
+            .requestPermissionIfNeeded(db: _db);
+      }
+      if (!enabled) {
+        _snack('Notifications are blocked. Allow them in Android settings, '
+            'then tap the test again.');
+        return;
+      }
+      if (_diag != null && !_diag!.channelEnabled) {
+        _snack('The "Token expiry" channel is turned off. Enable it in '
+            'Android settings first.');
+        return;
+      }
+      final ok = await TokenNotifications.instance.showTestNotification();
+      _snack(ok
+          ? 'Test notification sent — check your notification shade.'
+          : 'Could not send the test notification. See the status above.');
+    } finally {
+      if (mounted) {
+        await _load();
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _allowNotifications() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      // The service rebuilds itself when this call actually grants the
+      // permission, so an expired token is announced immediately.
+      final ok = await TokenNotifications.instance
+          .requestPermissionIfNeeded(db: _db);
+      _snack(ok
+          ? 'Notifications allowed.'
+          : 'Still blocked. Open Android Settings → Apps → FuelToken Tracker '
+              '→ Notifications and turn them on.');
+    } finally {
+      if (mounted) {
+        await _load();
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+  }
+
+  void _allowExact() {
+    // The settings activity completes only when the user returns; the resume
+    // observer refreshes the status and the app-wide resume rebuild re-arms
+    // the expiry alarm with the newly granted permission.
+    unawaited(TokenNotifications.instance.requestExactAlarmPermission());
+    _snack('Turn on "Allow setting alarms and reminders", then come back.');
+  }
+
+  String _lastCheck(ReminderDiagnostics? d) {
+    if (d == null) return 'Checking…';
+    final t = d.lastRebuildAt;
+    if (t == null) return 'Not yet';
+    final diff = DateTime.now().difference(t);
+    if (diff.inSeconds < 60) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} h ago';
+    return '${diff.inDays} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _diag;
+    final enabled = d?.notificationsEnabled ?? false;
+    final exact = d?.exactAlarmsAllowed ?? false;
+    final on = (d?.ready ?? false) && enabled && (d?.channelEnabled ?? true);
+    final pending = d?.pendingCount ?? 0;
+
+    return FtSurface(
+      borderColor: on ? AppTheme.line : AppTheme.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: on
+                      ? AppTheme.tint
+                      : AppTheme.accent.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  on
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_off_rounded,
+                  color: on ? AppTheme.primary : AppTheme.ink,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Renewal reminders',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.ink,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Refresh status',
+                visualDensity: VisualDensity.compact,
+                onPressed: _busy ? null : _load,
+                icon: const Icon(Icons.refresh_rounded,
+                    size: 20, color: AppTheme.textMid),
+              ),
+              FtPill(
+                on ? 'ON' : 'OFF',
+                color: on ? AppTheme.activeGreen : AppTheme.danger,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'You get an alert the moment a token expires, then reminders at '
+            '09:00, 15:00 and 20:00 while the vehicle is due.',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppTheme.textMid,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.surface,
+              borderRadius: BorderRadius.circular(AppTheme.rMd),
+            ),
+            child: Column(
+              children: [
+                _ReminderStatusLine(
+                  label: 'Notifications',
+                  value: d == null
+                      ? 'Checking…'
+                      : (enabled ? 'Allowed' : 'Blocked'),
+                  ok: enabled,
+                ),
+                const SizedBox(height: 8),
+                _ReminderStatusLine(
+                  label: 'Exact timing',
+                  value: d == null
+                      ? 'Checking…'
+                      : (exact ? 'Allowed' : 'Approximate'),
+                  ok: exact,
+                ),
+                const SizedBox(height: 8),
+                _ReminderStatusLine(
+                  label: 'Queued',
+                  value: d == null
+                      ? 'Checking…'
+                      : '$pending reminder${pending == 1 ? '' : 's'}',
+                  ok: true,
+                ),
+                const SizedBox(height: 8),
+                _ReminderStatusLine(
+                  label: 'Last check',
+                  value: _lastCheck(d),
+                  ok: d?.lastError == null,
+                ),
+              ],
+            ),
+          ),
+          if (d != null && !d.ready) ...[
+            const SizedBox(height: 10),
+            Text(
+              d.lastError ?? 'The reminder service could not start.',
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: AppTheme.danger,
+                height: 1.35,
+              ),
+            ),
+          ] else if (d != null && !d.channelEnabled) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'The "Token expiry" channel is turned off. Open Android '
+              'Settings → Apps → FuelToken Tracker → Notifications → '
+              'Token expiry and turn it on.',
+              style: TextStyle(
+                fontSize: 12.5,
+                color: AppTheme.pendingOrange,
+                height: 1.35,
+              ),
+            ),
+          ] else if (d?.lastError != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              d!.lastError!,
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: AppTheme.danger,
+                height: 1.35,
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          FtPrimaryButton(
+            label: 'Send test notification',
+            busy: _busy,
+            onPressed: _test,
+          ),
+          if (d != null && !enabled) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _allowNotifications,
+                icon: const Icon(Icons.notifications_off_rounded, size: 18),
+                label: const Text('Allow notifications'),
+              ),
+            ),
+          ],
+          if (d != null && !exact) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _allowExact,
+                icon: const Icon(Icons.alarm_rounded, size: 18),
+                label: const Text('Allow exact timing'),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          const Text(
+            'If reminders still don\'t arrive, set Android Settings → Apps → '
+            'FuelToken Tracker → Battery to Unrestricted.',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppTheme.textLight,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReminderStatusLine extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool ok;
+  const _ReminderStatusLine({
+    required this.label,
+    required this.value,
+    required this.ok,
+  });
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(
+            ok ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
+            size: 16,
+            color: ok ? AppTheme.activeGreen : AppTheme.pendingOrange,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: AppTheme.textMid),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+              color: ok ? AppTheme.ink : AppTheme.pendingOrange,
+            ),
+          ),
+        ],
+      );
 }
 
 class SettingsScreen extends StatelessWidget {

@@ -34,15 +34,18 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
   late TextEditingController _tokenCodeCtrl;
   late TextEditingController _vehicleNoCtrl;
   late TextEditingController _personNameCtrl;
+  late TextEditingController _cnicCtrl;
   late TextEditingController _mobileCtrl;
   late TextEditingController _subsidyCtrl;
   Timer? _dupDebounce;
+  Timer? _ownerDebounce;
 
   VehicleType _vehicleType = VehicleType.motorcycle;
   DateTime? _expiryDate;
   DateTime? _dateReceived; // preserved on edit, now() on create
   bool _saving = false;
   bool _duplicateWarning = false;
+  bool _ownerPrefilled = false;
 
   bool get _isEditing => widget.existing != null;
   bool get _isPrefilled => !_isEditing && widget.prefill != null;
@@ -54,6 +57,7 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
     _tokenCodeCtrl = TextEditingController(text: t?.tokenCode ?? '');
     _vehicleNoCtrl = TextEditingController(text: t?.vehicleNumber ?? '');
     _personNameCtrl = TextEditingController(text: t?.personName ?? '');
+    _cnicCtrl = TextEditingController(text: t?.cnic ?? '');
     _mobileCtrl = TextEditingController(text: t?.mobileNumber ?? '');
     _subsidyCtrl =
         TextEditingController(text: t?.subsidyAmount?.toStringAsFixed(0) ?? '500');
@@ -61,15 +65,26 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
     _dateReceived = t?.dateReceived;
     if (t != null) {
       _vehicleType = t.vehicleType;
+      // Owner details live on the vehicle: fill blanks already on the form
+      // from an earlier token of the same plate (after first layout).
+      WidgetsBinding.instance.addPostFrameCallback((_) => _lookupOwner());
     }
   }
 
   @override
   void dispose() {
-    for (final c in [_tokenCodeCtrl, _vehicleNoCtrl, _personNameCtrl, _mobileCtrl, _subsidyCtrl]) {
+    for (final c in [
+      _tokenCodeCtrl,
+      _vehicleNoCtrl,
+      _personNameCtrl,
+      _cnicCtrl,
+      _mobileCtrl,
+      _subsidyCtrl,
+    ]) {
       c.dispose();
     }
     _dupDebounce?.cancel();
+    _ownerDebounce?.cancel();
     super.dispose();
   }
 
@@ -84,6 +99,32 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
     if (code.isEmpty) return;
     final exists = await _db.tokenCodeExists(code, excludeId: widget.existing?.id);
     if (mounted) setState(() => _duplicateWarning = exists);
+  }
+
+  /// Owner name/CNIC are a property of the vehicle, not of one weekly token.
+  /// As soon as a plate is known, pull the freshest values recorded for it.
+  void _scheduleOwnerLookup() {
+    _ownerDebounce?.cancel();
+    _ownerDebounce = Timer(const Duration(milliseconds: 400), _lookupOwner);
+  }
+
+  Future<void> _lookupOwner() async {
+    final plate = _vehicleNoCtrl.text.trim();
+    if (plate.isEmpty) return;
+    final owner = await _db.vehicleOwnerFor(plate, excludeId: widget.existing?.id);
+    if (!mounted || owner == null || owner.isEmpty) return;
+
+    var filled = false;
+    if (_personNameCtrl.text.trim().isEmpty && owner.personName != null) {
+      _personNameCtrl.text = owner.personName!;
+      filled = true;
+    }
+    if (_cnicCtrl.text.trim().isEmpty && owner.cnic != null) {
+      _cnicCtrl.text = owner.cnic!;
+      filled = true;
+    }
+    // Only ever fills blanks — never overwrites something the user typed.
+    if (filled) setState(() => _ownerPrefilled = true);
   }
 
   Future<void> _save() async {
@@ -105,13 +146,16 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
       vehicleType: _vehicleType,
       personName: _personNameCtrl.text.trim().isEmpty ? null : _personNameCtrl.text.trim(),
       mobileNumber: _mobileCtrl.text.trim().isEmpty ? null : _mobileCtrl.text.trim(),
-      cnic: null,
+      cnic: _cnicCtrl.text.trim().isEmpty ? null : _cnicCtrl.text.trim(),
       status: widget.existing?.status ?? TokenStatus.active,
       dateReceived: _dateReceived ?? DateTime.now(),
       dateImported: widget.existing?.dateImported ?? DateTime.now(),
       expiryDate: _expiryDate,
+      redeemedAt: widget.existing?.redeemedAt,
       subsidyAmount: subsidyAmount,
       fuelLitres: widget.existing?.fuelLitres ?? defaultLitres,
+      litresUsed: widget.existing?.litresUsed,
+      originalMessage: widget.existing?.originalMessage,
       notes: widget.existing?.notes,
       isPotentialDuplicate: _duplicateWarning || (widget.existing?.isPotentialDuplicate ?? false),
     );
@@ -157,6 +201,7 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
   @override
   Widget build(BuildContext context) {
     final hasOptional = _personNameCtrl.text.trim().isNotEmpty ||
+        _cnicCtrl.text.trim().isNotEmpty ||
         _mobileCtrl.text.trim().isNotEmpty;
     return Scaffold(
       appBar: AppBar(
@@ -238,6 +283,7 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Enter the vehicle number'
                   : null,
+              onChanged: (_) => _scheduleOwnerLookup(),
             ),
             const SizedBox(height: 12),
             GridView.count(
@@ -290,6 +336,13 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
 
             // ── Optional extras, tucked away ────────────────────────────────
             const SizedBox(height: 16),
+            if (_ownerPrefilled)
+              _InfoBanner(
+                icon: AppIcons.verify,
+                text: "Owner details filled from this vehicle's earlier token.",
+                color: AppTheme.primary,
+                background: AppTheme.tint,
+              ),
             Container(
               decoration: BoxDecoration(
                 color: AppTheme.cardBg,
@@ -317,6 +370,23 @@ class _AddTokenScreenState extends State<AddTokenScreen> {
                         prefixIcon: Padding(
                           padding: const EdgeInsets.all(14),
                           child: AppIcons.svg(AppIcons.verify,
+                              size: 20, color: AppTheme.textMid),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _cnicCtrl,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: <TextInputFormatter>[
+                        CnicInputFormatter(),
+                      ],
+                      decoration: InputDecoration(
+                        labelText: 'Owner CNIC',
+                        hintText: '42101-1234567-1',
+                        prefixIcon: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: AppIcons.svg(AppIcons.lock,
                               size: 20, color: AppTheme.textMid),
                         ),
                       ),

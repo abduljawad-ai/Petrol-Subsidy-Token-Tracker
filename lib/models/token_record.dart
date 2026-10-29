@@ -57,11 +57,6 @@ class TokenRecord {
     this.isPotentialDuplicate = false,
   });
 
-  int get litresRemaining {
-    if (fuelLitres == null) return 0;
-    return fuelLitres! - (litresUsed ?? 0);
-  }
-
   /// Masked token code for list display (e.g. "266 •••• 719" or "840 •••• 225")
   /// so bystanders cannot read the full token from a distance.
   String get maskedTokenCode {
@@ -178,30 +173,47 @@ class TokenRecord {
     };
   }
 
+  /// Tolerant row decoder. Values can arrive as int or double depending on
+  /// the SQLite column affinity / JSON round-trip, and enum ordinals can be
+  /// out of range after a downgrade — never let that crash a screen.
   factory TokenRecord.fromMap(Map<String, dynamic> map) {
     return TokenRecord(
-      id: map['id'] as String,
-      tokenCode: map['tokenCode'] as String,
-      vehicleNumber: map['vehicleNumber'] as String,
-      vehicleType: VehicleType.values[map['vehicleType'] as int],
+      id: map['id']?.toString() ?? '',
+      tokenCode: map['tokenCode']?.toString() ?? '',
+      vehicleNumber: map['vehicleNumber']?.toString() ?? '',
+      vehicleType: _enumAt(
+          VehicleType.values, map['vehicleType'], VehicleType.other),
       personName: map['personName'] as String?,
       mobileNumber: map['mobileNumber'] as String?,
       cnic: map['cnic'] as String?,
-      status: TokenStatus.values[map['status'] as int],
-      dateReceived: DateTime.fromMillisecondsSinceEpoch(map['dateReceived'] as int),
-      dateImported: DateTime.fromMillisecondsSinceEpoch(map['dateImported'] as int),
-      expiryDate: map['expiryDate'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['expiryDate'] as int)
-          : null,
-      redeemedAt: map['redeemedAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['redeemedAt'] as int)
-          : null,
-      subsidyAmount: map['subsidyAmount'] as double?,
-      fuelLitres: map['fuelLitres'] as int?,
-      litresUsed: map['litresUsed'] as int?,
+      status: _enumAt(TokenStatus.values, map['status'], TokenStatus.unknown),
+      dateReceived: _date(map['dateReceived']),
+      dateImported: _date(map['dateImported']),
+      expiryDate: _dateOrNull(map['expiryDate']),
+      redeemedAt: _dateOrNull(map['redeemedAt']),
+      subsidyAmount: (map['subsidyAmount'] as num?)?.toDouble(),
+      fuelLitres: (map['fuelLitres'] as num?)?.toInt(),
+      litresUsed: (map['litresUsed'] as num?)?.toInt(),
       originalMessage: map['originalMessage'] as String?,
       notes: map['notes'] as String?,
-      isPotentialDuplicate: (map['isPotentialDuplicate'] as int? ?? 0) == 1,
+      isPotentialDuplicate: _asBool(map['isPotentialDuplicate']),
     );
   }
+
+  static T _enumAt<T>(List<T> values, dynamic raw, T fallback) {
+    final index = (raw as num?)?.toInt();
+    if (index == null || index < 0 || index >= values.length) return fallback;
+    return values[index];
+  }
+
+  static DateTime _date(dynamic raw) => DateTime.fromMillisecondsSinceEpoch(
+      (raw as num?)?.toInt() ?? 0);
+
+  static DateTime? _dateOrNull(dynamic raw) {
+    final ms = (raw as num?)?.toInt();
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  static bool _asBool(dynamic raw) =>
+      raw == true || (raw is num && raw.toInt() == 1);
 }

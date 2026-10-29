@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../db/database_helper.dart';
 import '../models/token_record.dart';
@@ -34,6 +36,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _syncPromptRunning = false;
   int _navIndex = 0;
   int _historyRevision = 0; // bumped to force HistoryScreen reload
+  int _loadGeneration = 0; // stale async loads must not overwrite newer ones
+  int _loadedWeek = _weekOfYear(DateTime.now());
+  Timer? _expiryTicker;
 
   @override
   void initState() {
@@ -42,24 +47,39 @@ class _HomeScreenState extends State<HomeScreen> {
     // Live refresh: fires for THIS device's writes (add/use/delete) AND for
     // rows silently merged down from Drive a few seconds after open — so the
     // restored/updated list appears by itself, no manual refresh needed.
-    DatabaseHelper.addWriteListener(_onDbWrite);
+    DatabaseHelper.addChangeListener(_onDbWrite);
+    // A token can expire while the app sits open. Without a tick the card
+    // keeps saying ACTIVE and stays tappable until the next rebuild.
+    _expiryTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted || _navIndex != 0) return;
+      final week = _weekOfYear(DateTime.now());
+      final expired =
+          _activeThisWeek.any((t) => t.isExpired) ||
+          _otherActive.any((t) => t.isExpired);
+      if (expired || week != _loadedWeek) _load(silent: true);
+    });
     // Give the first frame a beat, then start sync + first-run prompts.
     Future.delayed(const Duration(milliseconds: 1600), _maybeSyncPrompt);
   }
 
   void _onDbWrite(DatabaseHelper _) {
-    if (_navIndex == 0) _load();
+    if (_navIndex == 0) _load(silent: true);
   }
 
   @override
   void dispose() {
-    DatabaseHelper.removeWriteListener(_onDbWrite);
+    DatabaseHelper.removeChangeListener(_onDbWrite);
+    _expiryTicker?.cancel();
     _pageController.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  /// [silent] keeps the current list on screen while refreshing — a DB write
+  /// from sync or a background merge must never flash the spinner.
+  Future<void> _load({bool silent = false}) async {
+    if (!mounted) return;
+    final generation = ++_loadGeneration;
+    if (!silent) setState(() => _loading = true);
     try {
       // Expired tokens never appear on the main page: expiry is checked at
       // load time (status stays 'active' in DB but the pump won't accept
@@ -68,22 +88,26 @@ class _HomeScreenState extends State<HomeScreen> {
           (await _db.getThisWeekActive()).where((t) => !t.isExpired).toList();
       final allActive =
           (await _db.getActiveTokens()).where((t) => !t.isExpired).toList();
+      final thisWeekIds = thisWeek.map((t) => t.id).toSet();
       final other =
-          allActive.where((t) => !thisWeek.any((w) => w.id == t.id)).toList();
-      if (mounted) {
-        setState(() {
-          _activeThisWeek = thisWeek;
-          _otherActive = other;
-          _loading = false;
-        });
-      }
+          allActive.where((t) => !thisWeekIds.contains(t.id)).toList();
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _activeThisWeek = thisWeek;
+        _otherActive = other;
+        _loading = false;
+        _loadedWeek = _weekOfYear(DateTime.now());
+      });
     } catch (err) {
-      if (mounted) {
-        setState(() => _loading = false);
-        _snack('Could not load tokens: $err', AppTheme.danger);
-      }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() => _loading = false);
+      _snack('Could not load tokens: $err', AppTheme.danger);
     }
   }
+
+  /// Mirrors DatabaseHelper's ISO-ish week numbering for the rollover tick.
+  static int _weekOfYear(DateTime date) =>
+      (date.difference(DateTime(date.year, 1, 1)).inDays / 7).floor() + 1;
 
   // ── ONE-TIME USE ───────────────────────────────────────────────────────────
   Future<void> _promptUseToken(TokenRecord token) async {
@@ -344,6 +368,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Plays the delivered "token landed" burst once when fresh tokens appear.
   void _fireArrivalPulse() {
+    if (!mounted) return;
     setState(() => _pulseVisible = true);
     Future<void>.delayed(const Duration(milliseconds: 800), () {
       if (mounted) setState(() => _pulseVisible = false);

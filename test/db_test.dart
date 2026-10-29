@@ -131,4 +131,28 @@ void main() {
     expect(week.where((t) => t.tokenCode == 'WEEKTEST1').length, 1,
         reason: 'expected week $expectedWeek; token did not match week filter');
   });
+
+  test('TokenRecord.fromMap tolerates doubles, unknown enums and bools', () {
+    final r = TokenRecord.fromMap({
+      'id': 'x1',
+      'tokenCode': 'C1',
+      'vehicleNumber': 'ABC-1',
+      'vehicleType': 99, // out of range (downgrade / corrupt row)
+      'status': -1,
+      'dateReceived': 1729000000000.0, // REAL affinity
+      'dateImported': 1729000000000,
+      'expiryDate': 1800000000000.0,
+      'subsidyAmount': 500, // int from a JSON round-trip
+      'fuelLitres': 20.0,
+      'litresUsed': 3.0,
+      'isPotentialDuplicate': true,
+    });
+    expect(r.vehicleType, VehicleType.other);
+    expect(r.status, TokenStatus.unknown);
+    expect(r.subsidyAmount, 500.0);
+    expect(r.fuelLitres, 20);
+    expect(r.litresUsed, 3);
+    expect(r.expiryDate, DateTime.fromMillisecondsSinceEpoch(1800000000000));
+    expect(r.isPotentialDuplicate, isTrue);
+  });
 }

@@ -130,6 +130,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     final all = await _db.getAllTokens();
     if (mounted) {

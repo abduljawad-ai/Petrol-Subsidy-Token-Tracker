@@ -1,6 +1,8 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/token_record.dart';
+import '../models/vehicle_owner.dart';
+import '../services/renewal_service.dart';
 
 /// DB v3 — sync-ready schema (see SYNC_PLAN.md):
 ///  - `updatedAt`  ms epoch, bumped on EVERY local write (merge discriminator)
@@ -13,12 +15,14 @@ class DatabaseHelper {
   factory DatabaseHelper() => _instance;
   DatabaseHelper._internal();
 
-  static Database? _database;
+  static Future<Database>? _databaseFuture;
 
   static final List<void Function(DatabaseHelper)> _writeListeners = [];
+  static final List<void Function(DatabaseHelper)> _changeListeners = [];
 
   /// Register for post-write notifications (sync auto-push, live counters).
   /// Listeners may add other listeners while being notified, hence the copy.
+  /// Fires only for LOCAL writes — never for rows merged down from Drive.
   static void addWriteListener(void Function(DatabaseHelper) l) {
     _writeListeners.add(l);
   }
@@ -27,10 +31,21 @@ class DatabaseHelper {
     _writeListeners.remove(l);
   }
 
-  Future<Database> get database async {
-    _database ??= await _initDatabase();
-    return _database!;
+  /// Register for "visible data changed" notifications: local writes AND
+  /// remote rows applied by sync. UI refresh and reminder re-scheduling use
+  /// this; the sync engine itself must use [addWriteListener] to avoid
+  /// kicking a fresh push every time it pulls.
+  static void addChangeListener(void Function(DatabaseHelper) l) {
+    _changeListeners.add(l);
   }
+
+  static void removeChangeListener(void Function(DatabaseHelper) l) {
+    _changeListeners.remove(l);
+  }
+
+  /// Memoized Future, not just the Database: two callers arriving before the
+  /// first open completes used to race into two `openDatabase` calls.
+  Future<Database> get database => _databaseFuture ??= _initDatabase();
 
   Future<Database> _initDatabase() async {
     final dbPath = await getDatabasesPath();
@@ -95,16 +110,20 @@ class DatabaseHelper {
   // ── INSERT ──────────────────────────────────────────────────────────────────
   Future<void> insertToken(TokenRecord token, {bool fromSync = false}) async {
     final db = await database;
-    final map = token.toMap();
-    map['weekNumber'] = _weekOfYear(token.dateReceived);
-    map['weekYear'] = token.dateReceived.year;
+    // Owner details are per-vehicle: a token imported from SMS/OCR carries no
+    // name/CNIC, so inherit the freshest ones already recorded for this plate.
+    final record = await _inheritVehicleOwner(token);
+    final map = record.toMap();
+    map['weekNumber'] = _weekOfYear(record.dateReceived);
+    map['weekYear'] = record.dateReceived.year;
     // Sync bookkeeping: replaced old tombstones revive the record.
     map
       ..['updatedAt'] = DateTime.now().millisecondsSinceEpoch
       ..['dirty'] = fromSync ? 0 : 1
       ..['deleted'] = 0;
     await db.insert('tokens', map, conflictAlgorithm: ConflictAlgorithm.replace);
-    await _log(db, token.id, 'ADDED', 'Token ${token.tokenCode} added');
+    await _log(db, record.id, 'ADDED', 'Token ${record.tokenCode} added');
+    await _propagateVehicleOwner(db, record);
     if (!fromSync) _notify();
   }
 
@@ -121,6 +140,9 @@ class DatabaseHelper {
     }
     await db.update('tokens', map, where: 'id = ?', whereArgs: [token.id]);
     await _log(db, token.id, 'UPDATED', 'Token ${token.tokenCode} updated');
+    // An owner name/CNIC added while editing this token fills the blanks on
+    // the other tokens of the same vehicle.
+    await _propagateVehicleOwner(db, token);
     if (!fromSync) _notify();
   }
 
@@ -177,9 +199,11 @@ class DatabaseHelper {
   }
 
   // ── APPLY REMOTE (from Drive) ───────────────────────────────────────────────
-  /// Wins decided by the merger. Never fires onWrite and never marks dirty —
-  /// this IS the sync pushback, not a user edit.
+  /// Wins decided by the merger. Never fires WRITE listeners and never marks
+  /// dirty — this IS the sync pushback, not a user edit. It does fire CHANGE
+  /// listeners so open screens refresh and reminders are re-scheduled.
   Future<void> applyRemoteRecords(List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return;
     final db = await database;
     final batch = db.batch();
     for (final source in rows) {
@@ -190,6 +214,9 @@ class DatabaseHelper {
       batch.insert('tokens', row, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
+    // Rows changed underneath the UI: refresh lists/cards. Does NOT fire
+    // write listeners, so this can never trigger another push.
+    _notifyChange();
   }
 
   // ── READ: all tokens ────────────────────────────────────────────────────────
@@ -343,12 +370,95 @@ class DatabaseHelper {
     final db = await database;
     final maps = await db.query(
       'tokens',
+      columns: ['id'],
       where: excludeId != null
           ? 'tokenCode = ? AND id != ? AND deleted = 0'
           : 'tokenCode = ? AND deleted = 0',
       whereArgs: excludeId != null ? [code, excludeId] : [code],
+      limit: 1,
     );
     return maps.isNotEmpty;
+  }
+
+  // ── OWNER DETAILS (per vehicle, shared by all of its tokens) ───────────────
+
+  /// SQL expression matching a plate regardless of case, spaces and dashes,
+  /// mirroring [RenewalService.normalizeVehicle].
+  static const String _vehicleKeySql =
+      "UPPER(REPLACE(REPLACE(TRIM(vehicleNumber), '-', ''), ' ', ''))";
+
+  /// Freshest non-empty owner name / CNIC ever recorded for [vehicleNumber].
+  /// The fields are looked up independently, so a name from one token and a
+  /// CNIC from another still combine. Returns null when nothing is known.
+  Future<VehicleOwner?> vehicleOwnerFor(String vehicleNumber,
+      {String? excludeId}) async {
+    final key = RenewalService.normalizeVehicle(vehicleNumber);
+    if (key.isEmpty) return null;
+    final db = await database;
+    final where = StringBuffer('deleted = 0 AND $_vehicleKeySql = ?');
+    final args = <Object?>[key];
+    if (excludeId != null) {
+      where.write(' AND id != ?');
+      args.add(excludeId);
+    }
+    final maps = await db.query(
+      'tokens',
+      columns: ['personName', 'cnic'],
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'dateImported DESC, dateReceived DESC',
+    );
+    String? name;
+    String? cnic;
+    for (final m in maps) {
+      name ??= VehicleOwner.clean(m['personName']);
+      cnic ??= VehicleOwner.clean(m['cnic']);
+      if (name != null && cnic != null) break;
+    }
+    if (name == null && cnic == null) return null;
+    return VehicleOwner(personName: name, cnic: cnic);
+  }
+
+  /// Fills a new token's blank owner fields from the same vehicle's history.
+  Future<TokenRecord> _inheritVehicleOwner(TokenRecord token) async {
+    final hasName = VehicleOwner.clean(token.personName) != null;
+    final hasCnic = VehicleOwner.clean(token.cnic) != null;
+    if (hasName && hasCnic) return token;
+    try {
+      final owner =
+          await vehicleOwnerFor(token.vehicleNumber, excludeId: token.id);
+      if (owner == null) return token;
+      return token.copyWith(
+        personName: hasName ? null : owner.personName,
+        cnic: hasCnic ? null : owner.cnic,
+      );
+    } catch (_) {
+      // Owner enrichment is a convenience — never fail the save for it.
+      return token;
+    }
+  }
+
+  /// Copies non-empty owner details onto sibling tokens of the same vehicle
+  /// that are missing them. Existing values are never overwritten. Only rows
+  /// that actually gain something are touched, and their `updatedAt`/`dirty`
+  /// are bumped so the fill also reaches other devices through sync.
+  Future<void> _propagateVehicleOwner(Database db, TokenRecord token) async {
+    final name = VehicleOwner.clean(token.personName);
+    final cnic = VehicleOwner.clean(token.cnic);
+    if (name == null && cnic == null) return;
+    final key = RenewalService.normalizeVehicle(token.vehicleNumber);
+    if (key.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    Future<void> fill(String column, String value) => db.rawUpdate(
+          'UPDATE tokens SET $column = ?, updatedAt = ?, dirty = 1 '
+          'WHERE deleted = 0 AND $_vehicleKeySql = ? AND id != ? '
+          "AND ($column IS NULL OR TRIM($column) = '')",
+          [value, now, key, token.id],
+        );
+
+    if (name != null) await fill('personName', name);
+    if (cnic != null) await fill('cnic', cnic);
   }
 
   // ── SYNC HELPERS ────────────────────────────────────────────────────────────
@@ -433,8 +543,19 @@ class DatabaseHelper {
   }
 
   void _notify() {
-    for (final l in List.of(_writeListeners)) {
-      l(this);
+    _notifyListeners(_writeListeners);
+    _notifyListeners(_changeListeners);
+  }
+
+  void _notifyChange() => _notifyListeners(_changeListeners);
+
+  void _notifyListeners(List<void Function(DatabaseHelper)> listeners) {
+    for (final l in List.of(listeners)) {
+      try {
+        l(this);
+      } catch (_) {
+        // A broken listener must never fail the write that triggered it.
+      }
     }
   }
 }

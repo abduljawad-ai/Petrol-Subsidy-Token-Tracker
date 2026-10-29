@@ -45,3 +45,60 @@ class PlateInputFormatter extends TextInputFormatter {
     );
   }
 }
+
+/// Formats a CNIC as `#####-#######-#` while typing and keeps the caret
+/// next to the digit the user just typed/removed.
+class CnicInputFormatter extends TextInputFormatter {
+  static const _maxDigits = 13;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final raw = newValue.text;
+    final cursor = newValue.selection.baseOffset;
+    final upTo = cursor < 0
+        ? ''
+        : raw.substring(0, cursor.clamp(0, raw.length));
+    final digitsBefore = upTo.replaceAll(RegExp(r'[^0-9]'), '').length;
+
+    var digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length > _maxDigits) digits = digits.substring(0, _maxDigits);
+
+    final text = _format(digits);
+    // Place the caret after the same number of digits it was after before.
+    var offset = 0;
+    var seen = 0;
+    if (digitsBefore > 0) {
+      offset = text.length;
+      for (var i = 0; i < text.length; i++) {
+        if (_isDigit(text[i])) {
+          seen++;
+          if (seen == digitsBefore) {
+            offset = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: offset),
+    );
+  }
+
+  static bool _isDigit(String ch) {
+    final c = ch.codeUnitAt(0);
+    return c >= 48 && c <= 57;
+  }
+
+  static String _format(String digits) {
+    final b = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i == 5 || i == 12) b.write('-');
+      b.write(digits[i]);
+    }
+    return b.toString();
+  }
+}

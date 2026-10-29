@@ -194,6 +194,81 @@ void main() {
       expect(env['deviceName'], 'Redmi 12C');
       expect(env['records'], isEmpty);
     });
+
+    test('notes and cnic survive the wire (REPLACE must not wipe them)', () {
+      final original = row({
+        'id': 'n1',
+        'personName': 'Ali',
+        'mobileNumber': '03001234567',
+        'cnic': '42101-1234567-1',
+        'notes': 'Owner: Ali — pump 3',
+      });
+      final wire = jsonDecode(jsonEncode(BackupCodec.rowToRecord(original)))
+          as Map<String, dynamic>;
+      final back = BackupCodec.recordToRow(wire);
+      expect(back['cnic'], '42101-1234567-1');
+      expect(back['notes'], 'Owner: Ali — pump 3');
+      expect(back['personName'], 'Ali');
+      expect(back['mobileNumber'], '03001234567');
+    });
+
+    test('recordsHash agrees for a DB row and its JSON record', () {
+      final dbRow = row({
+        'id': 'h1',
+        'subsidyAmount': 500.0, // SQLite REAL
+        'expiryDate': 1800000000000,
+        'litresUsed': null, // NULL in DB
+      });
+      final wire = BackupCodec.parseEnvelope({
+        'records': [
+          {
+            ...BackupCodec.rowToRecord(dbRow),
+            'subsidyAmount': 500, // JSON round-trip: int, not 500.0
+            'litresUsed': 0,
+            'personName': null, // explicit null from an older writer
+          }
+        ]
+      }).single;
+
+      expect(BackupCodec.recordsHash([dbRow]),
+          BackupCodec.recordsHash([wire]),
+          reason: 'int/double and null/absent must not change the fingerprint');
+    });
+
+    test('parseEnvelope strips explicit nulls', () {
+      final parsed = BackupCodec.parseEnvelope({
+        'records': [
+          {'id': 'x', 'personName': null, 'notes': null, 'deleted': false}
+        ]
+      }).single;
+      expect(parsed.containsKey('personName'), isFalse);
+      expect(parsed.containsKey('notes'), isFalse);
+    });
+
+    test('missing dateImported falls back to dateReceived, not wall clock', () {
+      final r = BackupCodec.recordToRow({
+        'id': 'd1',
+        'dateReceived': 1729000000000,
+      });
+      expect(r['dateImported'], 1729000000000);
+    });
+
+    test('fast-path invariant: local hash == pushed hash == downloaded hash',
+        () {
+      final local = [row({'id': 'p1', 'subsidyAmount': 500.0})];
+      final merge = BackupCodec.merge(local, const []);
+      final pushed = BackupCodec.recordsHash(merge.snapshot);
+
+      expect(BackupCodec.recordsHash(local), pushed,
+          reason: 'next launch must be able to skip work (pushedHash==localHash)');
+
+      final envelope = BackupCodec.buildEnvelope(
+          records: merge.snapshot, deviceName: 'x', lastSyncedAtMs: 1);
+      final downloaded = BackupCodec.parseEnvelope(
+          jsonDecode(jsonEncode(envelope)) as Map<String, dynamic>);
+      expect(BackupCodec.recordsHash(downloaded), pushed,
+          reason: 'another device must see the same fingerprint');
+    });
   });
 
   group('SyncText labels', () {

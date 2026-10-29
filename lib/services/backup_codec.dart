@@ -42,9 +42,11 @@ class SyncMerge {
 }
 
 class BackupCodec {
-  /// Stable fingerprint of a snapshot (delegates to the top-level helper).
+  /// Stable fingerprint of a snapshot, normalized through [rowToRecord] so a
+  /// raw DB row and the JSON record made from it always hash identically.
+  /// Without this the engine's "nothing changed" fast path can never hit.
   static String recordsHash(List<Map<String, dynamic>> records) =>
-      recordsHashImpl(records);
+      recordsHashImpl(records.map(rowToRecord).toList());
 
   /// GZIP payload detection (delegates to the top-level helper).
   static bool isGzipped(List<int> bytes) => isGzippedImpl(bytes);
@@ -57,6 +59,7 @@ class BackupCodec {
     'vehicleType',
     'personName',
     'mobileNumber',
+    'cnic',
     'status',
     'dateReceived',
     'dateImported',
@@ -65,6 +68,7 @@ class BackupCodec {
     'fuelLitres',
     'litresUsed',
     'originalMessage',
+    'notes',
     'redeemedAt',
     'updatedAt',
     'deleted',
@@ -77,6 +81,12 @@ class BackupCodec {
       final v = row[f];
       if (f == 'deleted') {
         rec[f] = _asDeleted(v);
+        continue;
+      }
+      // NULL and 0 both mean "nothing used"; emitting one canonical value
+      // keeps a NULL row and a 0 row hashing/merging identically.
+      if (f == 'litresUsed') {
+        rec[f] = (v as num?)?.toInt() ?? 0;
         continue;
       }
       if (v == null) continue;
@@ -104,7 +114,7 @@ class BackupCodec {
       'vehicleType': (rec['vehicleType'] as num?)?.toInt() ?? 0,
       'status': (rec['status'] as num?)?.toInt() ?? 0,
       'dateReceived': received,
-      'dateImported': (rec['dateImported'] as num?)?.toInt() ?? nowMs(),
+      'dateImported': (rec['dateImported'] as num?)?.toInt() ?? received,
       'expiryDate': rec['expiryDate'],
       'subsidyAmount': rec['subsidyAmount'],
       'fuelLitres': rec['fuelLitres'],
@@ -120,6 +130,8 @@ class BackupCodec {
     // Optional text fields survive rejection of nulls in JSON.
     row['personName'] = rec['personName'];
     row['mobileNumber'] = rec['mobileNumber'];
+    row['cnic'] = rec['cnic'];
+    row['notes'] = rec['notes'];
     return row;
   }
 
@@ -138,17 +150,17 @@ class BackupCodec {
   }
 
   /// Parses a downloaded envelope; tolerates garbage (returns empty).
+  /// Nulls are stripped so a record has exactly the shape [rowToRecord]
+  /// produces — otherwise the same row hashes differently on each side.
   static List<Map<String, dynamic>> parseEnvelope(dynamic decoded) {
     try {
       if (decoded is! Map<String, dynamic>) return [];
       final records = decoded['records'];
       if (records is! List) return [];
-      return records.whereType<Map>().map(
-        (r) {
-          final rec = Map<String, dynamic>.from(r);
-          return rec.cast<String, dynamic>();
-        },
-      ).toList();
+      return records.whereType<Map>().map((r) {
+        return Map<String, dynamic>.from(r)
+          ..removeWhere((_, v) => v == null);
+      }).toList();
     } catch (_) {
       return [];
     }
@@ -236,21 +248,23 @@ class BackupCodec {
     return SyncMerge(toApply, snapshot, toApply.isNotEmpty);
   }
 
-  /// Cheap equality between a DB row and a JSON record on merge-decided
-  /// fields. Tombstone parity included so a repeat merge is a no-op.
+  /// Full equality between a DB row and a JSON record on every synced field.
+  /// Both sides go through [rowToRecord] so the comparison can never drift
+  /// from the payload shape (missing keys, null vs absent, int vs double).
+  /// Tombstone parity is included so a repeat merge is a no-op.
   static bool _rowMatchesRecord(Map<String, dynamic> row, Map rec) {
-    final deletedRow = _asDeleted(row['deleted']);
-    final deletedRec = _asDeleted(rec['deleted']);
-    return (row['updatedAt'] as num?)?.toInt() ==
-            (rec['updatedAt'] as num?)?.toInt() &&
-        deletedRow == deletedRec &&
-        (row['status'] as num?)?.toInt() == (rec['status'] as num?)?.toInt() &&
-        ((row['redeemedAt'] as num?) ?? 0) == ((rec['redeemedAt'] as num?) ?? 0) &&
-        row['tokenCode'] == rec['tokenCode'] &&
-        row['vehicleNumber'] == rec['vehicleNumber'] &&
-        ((row['subsidyAmount'] as num?) ?? 0) ==
-            ((rec['subsidyAmount'] as num?) ?? 0) &&
-        ((row['expiryDate'] as num?) ?? 0) == ((rec['expiryDate'] as num?) ?? 0);
+    final a = rowToRecord(row);
+    final b = rowToRecord(Map<String, dynamic>.from(rec));
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      final other = b[entry.key];
+      if (entry.key == 'deleted') {
+        if (_asDeleted(entry.value) != _asDeleted(other)) return false;
+      } else if (entry.value != other) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static int nowMs() => DateTime.now().millisecondsSinceEpoch;
@@ -295,6 +309,12 @@ class _CanonicalJsonEncoder {
     }
     if (value is List) {
       return '[${[for (final i in value) convert(i)].join(',')}]';
+    }
+    // SQLite stores REAL columns as doubles while JSON round-trips integral
+    // values as ints (500.0 vs 500). Normalize so the same data always hashes
+    // to the same code — otherwise the "nothing changed" fast path is dead.
+    if (value is double && value.isFinite && value == value.roundToDouble()) {
+      return value.toInt().toString();
     }
     return JsonEncoder().convert(value);
   }

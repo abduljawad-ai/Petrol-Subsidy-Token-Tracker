@@ -64,6 +64,7 @@ class _TokenDetailScreenState extends State<TokenDetailScreen> {
         perform: () => _db.markRedeemed(_token.id),
       );
       final updated = await _db.getTokenById(_token.id);
+      if (!mounted) return;
       setState(() {
         if (updated != null) {
           _token = updated;
@@ -424,6 +425,8 @@ class _TokenDetailScreenState extends State<TokenDetailScreen> {
     final rows = <_Row>[
       _Row(AppIcons.navTokens, 'Vehicle type', t.vehicleTypeLabel),
       if (t.personName != null) _Row(AppIcons.verify, 'Owner', t.personName!),
+      if (t.cnic != null && t.cnic!.isNotEmpty)
+        _Row(AppIcons.lock, 'CNIC', t.cnic!),
       if (t.mobileNumber != null)
         _Row(AppIcons.hardwarePhone, 'Mobile', t.mobileNumber!),
       if (t.subsidyAmount != null)

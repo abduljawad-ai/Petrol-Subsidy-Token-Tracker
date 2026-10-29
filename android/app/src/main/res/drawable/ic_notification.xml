@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dedicated notification small icon: white, transparent, 24dp. Android
+     requires a drawable here; an adaptive launcher icon can be rejected or
+     rendered badly on some OEM builds, which makes the notification silently
+     disappear. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Pump body with the display window cut out. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M4,20.5V5.5C4,4.67 4.67,4 5.5,4H12.5C13.33,4 14,4.67 14,5.5V20.5H4ZM7,7.5V10.5H11.5V7.5H7Z" />
+    <!-- Base. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2.5,20.5H15.5V22H2.5Z" />
+    <!-- Hose and nozzle. -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M14,9H15.5C16.33,9 17,9.67 17,10.5V16C17,16.83 17.67,17.5 18.5,17.5C19.33,17.5 20,16.83 20,16V8L17.8,5.8" />
+</vector>

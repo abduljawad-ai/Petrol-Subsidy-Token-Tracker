@@ -147,7 +147,7 @@ class OcrService {
             {'text': _prompt},
             {
               'inline_data': {
-                'mime_type': 'image/jpeg',
+                'mime_type': _mimeOf(bytes),
                 'data': base64Encode(bytes),
               },
             },
@@ -201,6 +201,30 @@ class OcrService {
       default:
         throw _OcrError('Reader error ${res.statusCode}.');
     }
+  }
+
+  /// The crop view returns PNG while camera photos are JPEG; labelling PNG
+  /// bytes as `image/jpeg` makes Gemini reject the request. Sniff the magic
+  /// bytes instead of re-encoding.
+  static String _mimeOf(List<int> b) {
+    if (b.length >= 8 &&
+        b[0] == 0x89 &&
+        b[1] == 0x50 &&
+        b[2] == 0x4E &&
+        b[3] == 0x47) {
+      return 'image/png';
+    }
+    if (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) {
+      return 'image/jpeg';
+    }
+    if (b.length >= 12 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
   }
 
   // ── Batch: bulk pick, per-photo processing, live progress ────────────────

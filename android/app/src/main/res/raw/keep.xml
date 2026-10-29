@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keep the launcher icon: it is referenced by name from Dart
+     (AndroidInitializationSettings('@mipmap/ic_launcher')) and from
+     scheduled notifications, so a resource shrinker cannot see the use. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@mipmap/ic_launcher,@drawable/ic_notification" />
